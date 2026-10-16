@@ -85,7 +85,7 @@ class MainActivity : ComponentActivity() {
         .isIgnoringBatteryOptimizations(packageName)
 
     fun syncService() {
-        if (Store.isLocked(this) && hasUsage()) {
+        if ((Store.isLocked(this) || Store.remoteUrl(this).isNotBlank()) && hasUsage()) {
             try { startForegroundService(Intent(this, BlockerService::class.java)) } catch (_: Exception) {}
         }
     }
@@ -378,7 +378,7 @@ fun AdminDialog(
                             OutlinedTextField(url, { url = it; saved = false }, label = { Text("رابط قاعدة بيانات Firebase") },
                                 singleLine = true, modifier = Modifier.fillMaxWidth(),
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
-                            Button(onClick = { Store.setRemoteUrl(act, url); Remote.sync(act); saved = true },
+                            Button(onClick = { Store.setRemoteUrl(act, url); Remote.sync(act); act.syncService(); saved = true },
                                 Modifier.fillMaxWidth()) { Text("حفظ وإرسال الآن") }
                             if (saved) Text("اتبعت ✅ افتح صفحة المتابعة وشوف", color = Ok)
                         }
