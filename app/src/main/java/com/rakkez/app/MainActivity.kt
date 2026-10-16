@@ -85,7 +85,7 @@ class MainActivity : ComponentActivity() {
         .isIgnoringBatteryOptimizations(packageName)
 
     fun syncService() {
-        if ((Store.isLocked(this) || Store.remoteUrl(this).isNotBlank()) && hasUsage()) {
+        if (Store.isLocked(this) && hasUsage()) {
             try { startForegroundService(Intent(this, BlockerService::class.java)) } catch (_: Exception) {}
         }
     }
@@ -176,12 +176,12 @@ fun Screen() {
         if (!overlayOk) item {
             Button(onClick = {
                 act.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${act.packageName}")))
-            }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) { Text("2) فعّل Display over other apps") }
+            }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) { Text("2) فعّل Display over other apps") }
         }
         if (!batteryOk) item {
             OutlinedButton(onClick = {
                 act.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${act.packageName}")))
-            }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) { Text("3) اسمح بالتشغيل في الخلفية (مهم)") }
+            }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) { Text("3) اسمح بالتشغيل في الخلفية (مهم)") }
         }
         item {
             Panel2 {
@@ -201,7 +201,7 @@ fun Screen() {
                         Store.log(act, "ADD", "➕ أضاف مهمة \"$nm\"")
                         name = ""; reload()
                     }
-                }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) { Text("إضافة") }
+                }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) { Text("إضافة") }
             }
         }
         if (tasks.isEmpty()) item {
@@ -227,15 +227,15 @@ fun Screen() {
                 if (!t.done) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         if (isActive) OutlinedButton(onClick = { Store.stopActive(act); reload() },
-                            modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp)) { Text("⏸ إيقاف") }
+                            Modifier.weight(1f), shape = RoundedCornerShape(12.dp)) { Text("⏸ إيقاف") }
                         else Button(onClick = { Store.start(act, t.id); reload() },
-                            modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp)) { Text("▶ ابدأ") }
+                            Modifier.weight(1f), shape = RoundedCornerShape(12.dp)) { Text("▶ ابدأ") }
                         Button(enabled = canFinish, onClick = {
                             if (activeId == t.id) Store.stopActive(act)
                             Store.save(act, Store.load(act).map { if (it.id == t.id) it.copy(done = true) else it })
                             Store.log(act, "DONE", "✅ خلّص \"${t.name}\"")
                             reload()
-                        }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp)) {
+                        }, Modifier.weight(1f), shape = RoundedCornerShape(12.dp)) {
                             Text(if (canFinish) "خلصت ✅" else "بعد نص الوقت")
                         }
                     }
@@ -297,7 +297,7 @@ fun AdminDialog(
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword))
                     Button(onClick = {
                         if (pin == Store.pin(act)) { ok = true; log = Store.loadLog(act) } else { err = true; pin = "" }
-                    }, modifier = Modifier.fillMaxWidth()) { Text("دخول") }
+                    }, Modifier.fillMaxWidth()) { Text("دخول") }
                     if (err) Text("الرقم السري غلط", color = Bad)
                     TextButton(onClick = onDismiss) { Text("إغلاق", color = Mute) }
                 }
@@ -353,10 +353,10 @@ fun AdminDialog(
                     item {
                         Panel2 {
                             Text(if (free) "القفل ملغي حاليًا" else "القفل شغال")
-                            Button(onClick = { onFree(!free); log = Store.loadLog(act) }, modifier = Modifier.fillMaxWidth()) {
+                            Button(onClick = { onFree(!free); log = Store.loadLog(act) }, Modifier.fillMaxWidth()) {
                                 Text(if (free) "🔒 رجّع القفل" else "🔓 إلغاء القفل")
                             }
-                            OutlinedButton(onClick = { onReset(); log = Store.loadLog(act) }, modifier = Modifier.fillMaxWidth()) {
+                            OutlinedButton(onClick = { onReset(); log = Store.loadLog(act) }, Modifier.fillMaxWidth()) {
                                 Text("تصفير وقت المهام")
                             }
                             OutlinedTextField(newPin, { newPin = it.filter(Char::isDigit) },
@@ -365,7 +365,7 @@ fun AdminDialog(
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
                             OutlinedButton(onClick = {
                                 if (newPin.length >= 4) { Store.setPin(act, newPin); newPin = "" }
-                            }, modifier = Modifier.fillMaxWidth()) { Text("حفظ الرقم") }
+                            }, Modifier.fillMaxWidth()) { Text("حفظ الرقم") }
                         }
                     }
                     item {
@@ -378,7 +378,7 @@ fun AdminDialog(
                             OutlinedTextField(url, { url = it; saved = false }, label = { Text("رابط قاعدة بيانات Firebase") },
                                 singleLine = true, modifier = Modifier.fillMaxWidth(),
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
-                            Button(onClick = { Store.setRemoteUrl(act, url); Remote.sync(act); act.syncService(); saved = true },
+                            Button(onClick = { Store.setRemoteUrl(act, url); Remote.sync(act); saved = true },
                                 Modifier.fillMaxWidth()) { Text("حفظ وإرسال الآن") }
                             if (saved) Text("اتبعت ✅ افتح صفحة المتابعة وشوف", color = Ok)
                         }

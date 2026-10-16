@@ -23,25 +23,16 @@ class BlockerService : Service() {
     private var current: String? = null
     private var lastQuery = 0L
     private var lastSync = 0L
-    private var lastPoll = 0L
 
     private val check = object : Runnable {
         override fun run() {
-            val locked = Store.isLocked(this@BlockerService)
-            val remote = Store.remoteUrl(this@BlockerService).isNotBlank()
-            if (!locked && !remote) {
+            if (!Store.isLocked(this@BlockerService)) {
                 hideOverlay()
                 stopSelf()
                 return
             }
             val t = System.currentTimeMillis()
-            if (remote && t - lastPoll > 8_000) { lastPoll = t; Remote.poll(this@BlockerService) }
-            if (remote && t - lastSync > 120_000) { lastSync = t; Remote.sync(this@BlockerService) }
-            if (!locked) {
-                hideOverlay()
-                handler.postDelayed(this, 2000)
-                return
-            }
+            if (t - lastSync > 120_000) { lastSync = t; Remote.sync(this@BlockerService) }
             updateCurrent()
             val pkg = current
             if (pkg != null && pkg in Store.BLOCKED) showOverlay() else hideOverlay()
