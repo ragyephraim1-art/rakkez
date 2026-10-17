@@ -260,12 +260,12 @@ fun Screen() {
                             Modifier.weight(1f), shape = RoundedCornerShape(12.dp)) { Text("⏸ إيقاف") }
                         else Button(onClick = { Store.start(act, t.id); reload() },
                             Modifier.weight(1f), shape = RoundedCornerShape(12.dp)) { Text("▶ ابدأ") }
-                        Button(enabled = canFinish, onClick = {
+                        Button(onClick = {
                             if (activeId == t.id) Store.stopActive(act)
                             Store.save(act, Store.load(act).map { if (it.id == t.id) it.copy(done = true) else it })
                             Store.log(act, "done", t.name, 0, t.id)
                             reload()
-                        }, Modifier.weight(1f), shape = RoundedCornerShape(12.dp)) {
+                        }, modifier = Modifier.weight(1f), enabled = canFinish, shape = RoundedCornerShape(12.dp)) {
                             Text(if (canFinish) "خلصت ✅" else "بعد نص الوقت")
                         }
                     }
