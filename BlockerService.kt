@@ -18,6 +18,10 @@ import android.widget.LinearLayout
 import android.widget.TextView
 
 class BlockerService : Service() {
+    companion object {
+        @Volatile var beat = 0L
+    }
+
     private val handler = Handler(Looper.getMainLooper())
     private var overlay: View? = null
     private var current: String? = null
@@ -28,6 +32,7 @@ class BlockerService : Service() {
     private val check = object : Runnable {
         override fun run() {
             val nowT = System.currentTimeMillis()
+            beat = nowT
             if (nowT - lastWatchdog > 60_000) {
                 lastWatchdog = nowT
                 scheduleRestart(120_000)
