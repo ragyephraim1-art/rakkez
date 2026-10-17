@@ -22,20 +22,23 @@ class BlockerService : Service() {
     private var overlay: View? = null
     private var current: String? = null
     private var lastQuery = 0L
-    private var lastSync = 0L
+    private var lastSyncAt = 0L
 
     private val check = object : Runnable {
         override fun run() {
+            val nowT = System.currentTimeMillis()
+            if (nowT - lastSyncAt > 45_000) {
+                lastSyncAt = nowT
+                Thread { Sync.run(this@BlockerService) }.start()
+            }
             if (!Store.isLocked(this@BlockerService)) {
                 hideOverlay()
-                stopSelf()
+                handler.postDelayed(this, 2000)
                 return
             }
-            val t = System.currentTimeMillis()
-            if (t - lastSync > 120_000) { lastSync = t; Remote.sync(this@BlockerService) }
             updateCurrent()
             val pkg = current
-            if (pkg != null && pkg in Store.BLOCKED) showOverlay() else hideOverlay()
+            if (pkg != null && pkg in Store.blocked(this@BlockerService)) showOverlay() else hideOverlay()
             handler.postDelayed(this, 500)
         }
     }
@@ -57,8 +60,6 @@ class BlockerService : Service() {
     private fun showOverlay() {
         if (overlay != null || !Settings.canDrawOverlays(this)) return
         val left = Store.remaining(this)
-        val appName = Store.NAMES[current] ?: current ?: ""
-        Store.log(this, "BLOCK", "🚫 حاول يفتح $appName")
         fun tv(t: String, size: Float, color: Int, pad: Int = 0) = TextView(this).apply {
             text = t; textSize = size; setTextColor(color); gravity = Gravity.CENTER; setPadding(0, pad, 0, pad)
         }
@@ -89,7 +90,14 @@ class BlockerService : Service() {
         try {
             (getSystemService(Context.WINDOW_SERVICE) as WindowManager).addView(root, lp)
             overlay = root
+            Store.log(this, "blocked", appLabel(current))
         } catch (_: Exception) {}
+    }
+
+    private fun appLabel(pkg: String?): String {
+        if (pkg == null) return "تطبيق"
+        return try { packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString() }
+        catch (_: Exception) { pkg }
     }
 
     private fun hideOverlay() {

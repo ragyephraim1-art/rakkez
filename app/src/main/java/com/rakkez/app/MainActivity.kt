@@ -10,6 +10,7 @@ import android.os.PowerManager
 import android.os.Process
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -33,13 +34,14 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
-import kotlinx.coroutines.delay
 
 private val Bg = Color(0xFF0F2A2B)
 private val Panel = Color(0xFF163A3C)
@@ -85,16 +87,51 @@ class MainActivity : ComponentActivity() {
         .isIgnoringBatteryOptimizations(packageName)
 
     fun syncService() {
-        if (Store.isLocked(this) && hasUsage()) {
+        if (hasUsage()) {
             try { startForegroundService(Intent(this, BlockerService::class.java)) } catch (_: Exception) {}
         }
     }
+}
+
+fun fmt(s: Int) = "%02d:%02d".format(s / 60, s % 60)
+
+fun loadApps(c: Context): List<Pair<String, String>> {
+    val pm = c.packageManager
+    val i = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+    return pm.queryIntentActivities(i, 0)
+        .map { it.activityInfo.packageName to it.loadLabel(pm).toString() }
+        .filter { it.first != c.packageName }
+        .distinctBy { it.first }
+        .sortedBy { it.second.lowercase() }
+}
+
+fun logText(e: LogEntry): String = when (e.type) {
+    "add" -> "➕ أضاف مهمة \"${e.name}\" (${e.extra} د)"
+    "start" -> "▶ بدأ \"${e.name}\""
+    "stop" -> "⏸ وقّف \"${e.name}\" بعد ${fmt(e.extra)}"
+    "done" -> "✅ خلّص \"${e.name}\""
+    "blocked" -> "🚫 حاول يفتح ${e.name}"
+    "free" -> "🔓 الأخ الكبير ألغى القفل"
+    "relock" -> "🔒 الأخ الكبير رجّع القفل"
+    "reset" -> "↺ الأخ الكبير صفّر الوقت"
+    "admdel" -> "🗑 الأخ الكبير حذف \"${e.name}\""
+    else -> e.type
 }
 
 @Composable
 fun Panel2(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     Surface(modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), color = Panel) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp), content = content)
+    }
+}
+
+@Composable
+fun Stat(big: String, small: String, modifier: Modifier = Modifier) {
+    Surface(modifier, shape = RoundedCornerShape(14.dp), color = Panel) {
+        Column(Modifier.padding(10.dp).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(big, color = Acc, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
+            Text(small, color = Mute, fontSize = 11.sp)
+        }
     }
 }
 
@@ -109,18 +146,17 @@ fun Screen() {
     var overlayOk by remember { mutableStateOf(act.hasOverlay()) }
     var batteryOk by remember { mutableStateOf(act.hasBattery()) }
     var free by remember { mutableStateOf(Store.isFree(act)) }
-    var showAdmin by remember { mutableStateOf(false) }
-    var name by remember { mutableStateOf("") }
-    var mins by remember { mutableStateOf("60") }
+    var adminMode by remember { mutableIntStateOf(0) } // 0 مقفول، 1 رقم سري، 2 صفحة المتابعة
 
-    fun reload() {
+    fun refresh() {
         tasks = Store.load(act)
         activeId = Store.activeId(act)
         activeStart = Store.activeStart(act)
         free = Store.isFree(act)
         usageOk = act.hasUsage(); overlayOk = act.hasOverlay(); batteryOk = act.hasBattery()
-        act.syncService()
     }
+
+    fun reload() { refresh(); act.syncService() }
 
     fun live(t: StudyTask): Int =
         t.studiedSec + if (activeId == t.id) ((now - activeStart) / 1000).toInt().coerceAtLeast(0) else 0
@@ -132,11 +168,13 @@ fun Screen() {
         onDispose { owner.lifecycle.removeObserver(obs) }
     }
 
-    // عدّاد الشاشة + إيقاف تلقائي لما الوقت يكمل
     LaunchedEffect(Unit) {
+        var n = 0
         while (true) {
             delay(1000)
+            n++
             now = System.currentTimeMillis()
+            if (n % 4 == 0) refresh()
             val id = activeId
             if (id != 0L) {
                 val t = tasks.firstOrNull { it.id == id }
@@ -145,10 +183,14 @@ fun Screen() {
         }
     }
 
+    BackHandler(enabled = adminMode == 2) { adminMode = 0; reload() }
+
     val left = tasks.count { !it.done }
     val permsOk = usageOk && overlayOk
 
-    LazyColumn(
+    if (adminMode == 2) {
+        AdminPage(act, onChange = { reload() }, onBack = { adminMode = 0; reload() })
+    } else LazyColumn(
         Modifier.fillMaxSize().systemBarsPadding(),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -156,7 +198,7 @@ fun Screen() {
         item {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("ركّز 📚", fontSize = 32.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.weight(1f))
-                TextButton(onClick = { showAdmin = true }) { Text("🔑 الأخ الكبير", color = Mute) }
+                TextButton(onClick = { adminMode = 1 }) { Text("🔑 الأخ الكبير", color = Mute) }
             }
         }
         item {
@@ -183,29 +225,17 @@ fun Screen() {
                 act.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${act.packageName}")))
             }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) { Text("3) اسمح بالتشغيل في الخلفية (مهم)") }
         }
-        item {
-            Panel2 {
-                Text("مهمة جديدة", fontWeight = FontWeight.Bold)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(name, { name = it }, label = { Text("المادة") },
-                        modifier = Modifier.weight(1f), singleLine = true)
-                    OutlinedTextField(mins, { mins = it.filter(Char::isDigit) }, label = { Text("دقايق (10+)") },
-                        modifier = Modifier.width(96.dp), singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
-                }
-                Button(onClick = {
-                    val m = mins.toIntOrNull() ?: 0
-                    if (name.isNotBlank() && m >= 10) {
-                        val nm = name.trim()
-                        Store.save(act, Store.load(act) + StudyTask(System.currentTimeMillis(), nm, m))
-                        Store.log(act, "ADD", "➕ أضاف مهمة \"$nm\"")
-                        name = ""; reload()
-                    }
-                }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) { Text("إضافة") }
-            }
+        if (Store.serverUrl(act).isBlank()) item {
+            Panel2 { Text("⚠️ مش مربوط بالأخ الكبير. افتح 🔑 الأخ الكبير ثم الربط بصفحة المتابعة.", color = Bad) }
+        } else item {
+            val ls = if (now > 0) Store.lastSync(act) else 0L
+            Text(
+                if (ls == 0L) "جاري أول مزامنة…" else "آخر مزامنة: " + SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(ls)),
+                color = Mute, fontSize = 12.sp
+            )
         }
         if (tasks.isEmpty()) item {
-            Text("مفيش مهام لسه. اكتب المادة والدقايق وادوس إضافة.", color = Mute)
+            Text("مفيش مهام لسه. الأخ الكبير هيضيفلك مهامك.", color = Mute)
         }
         items(tasks, key = { it.id }) { t ->
             val sec = live(t)
@@ -217,7 +247,7 @@ fun Screen() {
                         fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                     Text("${t.minutes} دقيقة", color = Mute)
                 }
-                Text("%02d:%02d".format(sec / 60, sec % 60), fontSize = 34.sp, fontWeight = FontWeight.ExtraBold,
+                Text(fmt(sec), fontSize = 34.sp, fontWeight = FontWeight.ExtraBold,
                     color = if (isActive) Acc else TextC)
                 LinearProgressIndicator(
                     progress = { (sec / (t.minutes * 60f)).coerceIn(0f, 1f) },
@@ -225,7 +255,7 @@ fun Screen() {
                     color = if (t.done) Ok else Acc, trackColor = Bg
                 )
                 if (!t.done) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (isActive) OutlinedButton(onClick = { Store.stopActive(act); reload() },
                             Modifier.weight(1f), shape = RoundedCornerShape(12.dp)) { Text("⏸ إيقاف") }
                         else Button(onClick = { Store.start(act, t.id); reload() },
@@ -233,7 +263,7 @@ fun Screen() {
                         Button(enabled = canFinish, onClick = {
                             if (activeId == t.id) Store.stopActive(act)
                             Store.save(act, Store.load(act).map { if (it.id == t.id) it.copy(done = true) else it })
-                            Store.log(act, "DONE", "✅ خلّص \"${t.name}\"")
+                            Store.log(act, "done", t.name, 0, t.id)
                             reload()
                         }, Modifier.weight(1f), shape = RoundedCornerShape(12.dp)) {
                             Text(if (canFinish) "خلصت ✅" else "بعد نص الوقت")
@@ -244,162 +274,153 @@ fun Screen() {
         }
     }
 
-    if (showAdmin) AdminDialog(
-        act = act, free = free, tasks = tasks, activeId = activeId, activeStart = activeStart,
-        onFree = { v -> Store.setFree(act, v); reload() },
-        onReset = {
-            Store.stopActive(act)
-            Store.save(act, Store.load(act).map { it.copy(studiedSec = 0, done = false, sessions = 0) })
-            Store.log(act, "RESET", "🔄 صفّر وقت المهام")
-            reload()
-        },
-        onDeleteTask = { id ->
-            val t = Store.load(act).firstOrNull { it.id == id }
-            if (activeId == id) Store.stopActive(act)
-            Store.save(act, Store.load(act).filter { it.id != id })
-            if (t != null) Store.log(act, "DELETE", "🗑 حذف مهمة \"${t.name}\"")
-            reload()
-        },
-        onDismiss = { showAdmin = false }
-    )
-}
-
-private fun fmtDur(sec: Int): String {
-    val h = sec / 3600
-    val mi = (sec % 3600) / 60
-    return if (h > 0) "$h ساعة و $mi دقيقة" else "$mi دقيقة"
+    if (adminMode == 1) PinDialog(act, onOk = { adminMode = 2 }, onDismiss = { adminMode = 0 })
 }
 
 @Composable
-fun AdminDialog(
-    act: MainActivity, free: Boolean, tasks: List<StudyTask>, activeId: Long, activeStart: Long,
-    onFree: (Boolean) -> Unit, onReset: () -> Unit, onDeleteTask: (Long) -> Unit, onDismiss: () -> Unit
-) {
+fun PinDialog(act: MainActivity, onOk: () -> Unit, onDismiss: () -> Unit) {
     var pin by remember { mutableStateOf("") }
-    var ok by remember { mutableStateOf(false) }
     var err by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            Button(onClick = { if (pin == Store.pin(act)) onOk() else { err = true; pin = "" } }) { Text("دخول") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("إلغاء") } },
+        title = { Text("🔑 الأخ الكبير") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(pin, { pin = it.filter(Char::isDigit); err = false },
+                    label = { Text("الرقم السري") }, singleLine = true, isError = err,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword))
+                if (err) Text("الرقم السري غلط", color = Bad)
+            }
+        }
+    )
+}
+
+@Composable
+fun AdminPage(act: MainActivity, onChange: () -> Unit, onBack: () -> Unit) {
+    var rev by remember { mutableIntStateOf(0) }
+    val tasks = remember(rev) { Store.load(act) }
+    val logs = remember(rev) { Store.logs(act) }
+    val remoteFree = remember(rev) { Store.isFreeRemote(act) }
+    val localFree = remember(rev) { Store.isFree(act) && !Store.isFreeRemote(act) }
+    var blocked by remember { mutableStateOf(Store.blocked(act)) }
+    var showApps by remember { mutableStateOf(false) }
+    val apps = remember { loadApps(act) }
     var newPin by remember { mutableStateOf("") }
-    var log by remember { mutableStateOf(Store.loadLog(act)) }
-    val fmtDate = remember { SimpleDateFormat("d/M  HH:mm", Locale.US) }
+    var url by remember { mutableStateOf(Store.serverUrl(act)) }
+    var key by remember { mutableStateOf(Store.deviceKey(act)) }
+    var linkMsg by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
+    fun changed() { rev++; onChange() }
 
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(
-            Modifier.fillMaxSize().systemBarsPadding().padding(10.dp),
-            shape = RoundedCornerShape(22.dp), color = Bg, contentColor = TextC
-        ) {
-            if (!ok) {
-                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("🔑 الأخ الكبير", fontSize = 24.sp, fontWeight = FontWeight.ExtraBold)
-                    OutlinedTextField(pin, { pin = it.filter(Char::isDigit); err = false },
-                        label = { Text("الرقم السري") }, singleLine = true, isError = err,
-                        modifier = Modifier.fillMaxWidth(),
-                        visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword))
+    val dayStart = remember(rev) {
+        Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+        }.timeInMillis
+    }
+    val todaySec = logs.filter { it.type == "stop" && it.t >= dayStart }.sumOf { it.extra }
+    val todayBlocked = logs.count { it.type == "blocked" && it.t >= dayStart }
+    val dateFmt = remember { SimpleDateFormat("d/M HH:mm", Locale.getDefault()) }
+
+    LazyColumn(
+        Modifier.fillMaxSize().systemBarsPadding(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = onBack) { Text("رجوع", color = Acc) }
+                Text("🔑 الأخ الكبير", fontSize = 24.sp, fontWeight = FontWeight.ExtraBold)
+            }
+        }
+        item {
+            Panel2 {
+                Text("المهام والمتابعة بتتحكم فيها من صفحة الأخ الكبير على موبايلك.", color = Mute, fontSize = 13.sp)
+                if (remoteFree) Text("🔓 القفل ملغي من صفحة المتابعة", color = Ok, fontWeight = FontWeight.Bold)
+                else {
+                    Text(if (localFree) "🔓 القفل ملغي (من هنا)" else "🔒 القفل شغال",
+                        color = if (localFree) Ok else Acc, fontWeight = FontWeight.Bold)
                     Button(onClick = {
-                        if (pin == Store.pin(act)) { ok = true; log = Store.loadLog(act) } else { err = true; pin = "" }
-                    }, Modifier.fillMaxWidth()) { Text("دخول") }
-                    if (err) Text("الرقم السري غلط", color = Bad)
-                    TextButton(onClick = onDismiss) { Text("إغلاق", color = Mute) }
-                }
-            } else {
-                val cal = Calendar.getInstance().apply {
-                    set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
-                }
-                val dayStart = cal.timeInMillis
-                val today = log.filter { it.ts >= dayStart }
-                var studied = today.filter { it.type == "STOP" }.sumOf { it.sec }
-                if (activeId != 0L && activeStart > 0L) {
-                    val liveEl = ((System.currentTimeMillis() - maxOf(activeStart, dayStart)) / 1000).toInt().coerceAtLeast(0)
-                    studied += liveEl
-                }
-                val doneToday = today.count { it.type == "DONE" }
-                val blocksToday = today.count { it.type == "BLOCK" }
-
-                LazyColumn(
-                    Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    item {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("🔑 الأخ الكبير", fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.weight(1f))
-                            TextButton(onClick = onDismiss) { Text("إغلاق", color = Mute) }
-                        }
-                    }
-                    item {
-                        Panel2 {
-                            Text("📊 ملخص النهارده", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                            Text("⏱ ذاكر: ${fmtDur(studied)}")
-                            Text("✅ مهام خلصت: $doneToday")
-                            Text("🚫 محاولات فتح تطبيق ممنوع: $blocksToday", color = if (blocksToday > 0) Bad else TextC)
-                        }
-                    }
-                    item { Text("📋 المهام", fontWeight = FontWeight.Bold, fontSize = 18.sp) }
-                    if (tasks.isEmpty()) item { Text("مفيش مهام", color = Mute) }
-                    items(tasks, key = { "t" + it.id }) { t ->
-                        val liveSec = t.studiedSec +
-                            if (activeId == t.id) ((System.currentTimeMillis() - activeStart) / 1000).toInt().coerceAtLeast(0) else 0
-                        Panel2 {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Column(Modifier.weight(1f)) {
-                                    Text((if (t.done) "✅ " else "") + t.name, fontWeight = FontWeight.Bold, fontSize = 17.sp)
-                                    Text("ذاكر ${minOf(liveSec, t.minutes * 60) / 60} من ${t.minutes} دقيقة  •  ${t.sessions} جلسة", color = Mute)
-                                }
-                                TextButton(onClick = { onDeleteTask(t.id); log = Store.loadLog(act) }) {
-                                    Text("حذف", color = Bad)
-                                }
-                            }
-                        }
-                    }
-                    item {
-                        Panel2 {
-                            Text(if (free) "القفل ملغي حاليًا" else "القفل شغال")
-                            Button(onClick = { onFree(!free); log = Store.loadLog(act) }, Modifier.fillMaxWidth()) {
-                                Text(if (free) "🔒 رجّع القفل" else "🔓 إلغاء القفل")
-                            }
-                            OutlinedButton(onClick = { onReset(); log = Store.loadLog(act) }, Modifier.fillMaxWidth()) {
-                                Text("تصفير وقت المهام")
-                            }
-                            OutlinedTextField(newPin, { newPin = it.filter(Char::isDigit) },
-                                label = { Text("رقم سري جديد (4 أرقام+)") }, singleLine = true,
-                                modifier = Modifier.fillMaxWidth(),
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
-                            OutlinedButton(onClick = {
-                                if (newPin.length >= 4) { Store.setPin(act, newPin); newPin = "" }
-                            }, Modifier.fillMaxWidth()) { Text("حفظ الرقم") }
-                        }
-                    }
-                    item {
-                        var url by remember { mutableStateOf(Store.remoteUrl(act)) }
-                        var saved by remember { mutableStateOf(false) }
-                        Panel2 {
-                            Text("🌐 المتابعة عن بُعد", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                            Text("كود العائلة (اكتبه في صفحة المتابعة):", color = Mute)
-                            Text(Store.familyCode(act), fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = Acc)
-                            OutlinedTextField(url, { url = it; saved = false }, label = { Text("رابط قاعدة بيانات Firebase") },
-                                singleLine = true, modifier = Modifier.fillMaxWidth(),
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
-                            Button(onClick = { Store.setRemoteUrl(act, url); Remote.sync(act); saved = true },
-                                Modifier.fillMaxWidth()) { Text("حفظ وإرسال الآن") }
-                            if (saved) Text("اتبعت ✅ افتح صفحة المتابعة وشوف", color = Ok)
-                        }
-                    }
-                    item {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("🕘 سجل النشاط", fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.weight(1f))
-                            TextButton(onClick = { Store.clearLog(act); log = emptyList() }) { Text("مسح السجل", color = Bad) }
-                        }
-                    }
-                    if (log.isEmpty()) item { Text("السجل فاضي", color = Mute) }
-                    items(log.asReversed()) { e ->
-                        Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), color = Panel) {
-                            Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Text(fmtDate.format(Date(e.ts)), color = Mute, fontSize = 13.sp)
-                                Text(e.text, modifier = Modifier.weight(1f),
-                                    color = if (e.type == "BLOCK") Bad else TextC)
-                            }
-                        }
+                        Store.log(act, if (localFree) "relock" else "free")
+                        Store.setFree(act, !localFree); changed()
+                    }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
+                        Text(if (localFree) "🔒 رجّع القفل" else "🔓 إلغاء القفل من هنا")
                     }
                 }
+            }
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Stat(fmt(todaySec), "مذاكرة النهارده", Modifier.weight(1f))
+                Stat("${tasks.count { it.done }}/${tasks.size}", "مهام خلصت", Modifier.weight(1f))
+                Stat("$todayBlocked", "محاولات ممنوعة", Modifier.weight(1f))
+            }
+        }
+        item {
+            Panel2 {
+                Text("الربط بصفحة المتابعة", fontWeight = FontWeight.Bold)
+                OutlinedTextField(url, { url = it }, label = { Text("رابط السيرفر") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(key, { key = it }, label = { Text("مفتاح الجهاز (DEVICE_KEY)") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth())
+                Button(onClick = {
+                    Store.setLink(act, url, key)
+                    linkMsg = "جاري الاتصال…"
+                    scope.launch {
+                        val ok = withContext(Dispatchers.IO) { Sync.run(act) }
+                        linkMsg = if (ok) "✅ اتربط واتزامن" else "❌ فشل الاتصال، راجع الرابط والمفتاح"
+                        changed()
+                    }
+                }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) { Text("حفظ ومزامنة الآن") }
+                if (linkMsg.isNotEmpty()) Text(linkMsg)
+            }
+        }
+        item { Text("المهام الحالية", fontWeight = FontWeight.Bold, fontSize = 18.sp) }
+        if (tasks.isEmpty()) item { Text("مفيش مهام. ضيفها من صفحة المتابعة.", color = Mute) }
+        items(tasks, key = { it.id }) { t ->
+            Panel2 {
+                Text((if (t.done) "✅ " else "") + t.name, fontWeight = FontWeight.Bold)
+                val ses = logs.count { it.type == "start" && it.id == t.id }
+                Text("${fmt(t.studiedSec)} من ${t.minutes} د · $ses جلسة", color = Mute, fontSize = 13.sp)
+            }
+        }
+        item {
+            Panel2 {
+                Text("التطبيقات الممنوعة (${blocked.size})", fontWeight = FontWeight.Bold)
+                OutlinedButton(onClick = { showApps = !showApps }, Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)) { Text(if (showApps) "إخفاء القايمة" else "اختيار التطبيقات") }
+            }
+        }
+        if (showApps) items(apps, key = { it.first }) { (pkg, label) ->
+            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(label, modifier = Modifier.weight(1f))
+                Switch(checked = pkg in blocked, onCheckedChange = { on ->
+                    val n = if (on) blocked + pkg else blocked - pkg
+                    blocked = n; Store.setBlocked(act, n)
+                })
+            }
+        }
+        item { Text("سجل النشاط (على الموبايل)", fontWeight = FontWeight.Bold, fontSize = 18.sp) }
+        if (logs.isEmpty()) item { Text("مفيش نشاط لسه", color = Mute) }
+        items(logs.takeLast(40).reversed()) { e ->
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(dateFmt.format(Date(e.t)), color = Mute, fontSize = 12.sp)
+                Text(logText(e), fontSize = 14.sp)
+            }
+        }
+        item {
+            Panel2 {
+                Text("تغيير الرقم السري", fontWeight = FontWeight.Bold)
+                OutlinedTextField(newPin, { newPin = it.filter(Char::isDigit) },
+                    label = { Text("رقم جديد (4 أرقام+)") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth())
+                OutlinedButton(onClick = { if (newPin.length >= 4) { Store.setPin(act, newPin); newPin = "" } },
+                    shape = RoundedCornerShape(12.dp)) { Text("حفظ الرقم") }
             }
         }
     }
