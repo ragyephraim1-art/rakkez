@@ -7,5 +7,6 @@ import android.content.Intent
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
         try { c.startForegroundService(Intent(c, BlockerService::class.java)) } catch (_: Exception) {}
+        Reminders.schedule(c)
     }
 }

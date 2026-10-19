@@ -13,6 +13,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -24,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -82,6 +84,14 @@ class MainActivity : ComponentActivity() {
     }
 
     fun hasOverlay() = Settings.canDrawOverlays(this)
+
+    fun hasAccess(): Boolean {
+        val cn = android.content.ComponentName(this, FocusAccessibilityService::class.java)
+        val on = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: return false
+        return on.split(':').any {
+            it.equals(cn.flattenToString(), ignoreCase = true) || it.equals(cn.flattenToShortString(), ignoreCase = true)
+        }
+    }
 
     fun hasBattery() = (getSystemService(Context.POWER_SERVICE) as PowerManager)
         .isIgnoringBatteryOptimizations(packageName)
@@ -145,7 +155,9 @@ fun Screen() {
     var usageOk by remember { mutableStateOf(act.hasUsage()) }
     var overlayOk by remember { mutableStateOf(act.hasOverlay()) }
     var batteryOk by remember { mutableStateOf(act.hasBattery()) }
+    var accessOk by remember { mutableStateOf(act.hasAccess()) }
     var free by remember { mutableStateOf(Store.isFree(act)) }
+    var showAdd by remember { mutableStateOf(false) }
     var adminMode by remember { mutableIntStateOf(0) } // 0 مقفول، 1 رقم سري، 2 صفحة المتابعة
 
     fun refresh() {
@@ -153,13 +165,13 @@ fun Screen() {
         activeId = Store.activeId(act)
         activeStart = Store.activeStart(act)
         free = Store.isFree(act)
-        usageOk = act.hasUsage(); overlayOk = act.hasOverlay(); batteryOk = act.hasBattery()
+        usageOk = act.hasUsage(); overlayOk = act.hasOverlay(); batteryOk = act.hasBattery(); accessOk = act.hasAccess()
     }
 
-    fun reload() { refresh(); act.syncService() }
+    fun reload() { refresh(); act.syncService(); Reminders.schedule(act) }
 
     fun live(t: StudyTask): Int =
-        t.studiedSec + if (activeId == t.id) ((now - activeStart) / 1000).toInt().coerceAtLeast(0) else 0
+        t.studiedSec + if (activeId == t.id) Store.elapsed(activeStart, now) else 0
 
     val owner = LocalLifecycleOwner.current
     DisposableEffect(owner) {
@@ -185,7 +197,10 @@ fun Screen() {
 
     BackHandler(enabled = adminMode == 2) { adminMode = 0; reload() }
 
-    val left = tasks.count { !it.done }
+    val todays = tasks.filter { Store.isToday(it) }.sortedBy { it.startMin }
+    val nowMin = Store.nowMin()
+    val left = todays.count { !it.done && it.startMin <= nowMin }          // ميعادها جه وماخلصتش
+    val later = todays.filter { !it.done && it.startMin > nowMin }          // لسه ماجاش ميعادها
     val permsOk = usageOk && overlayOk
 
     if (adminMode == 2) {
@@ -197,19 +212,28 @@ fun Screen() {
     ) {
         item {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("ركّز 📚", fontSize = 32.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.weight(1f))
+                Image(painterResource(R.drawable.rakkez_logo), contentDescription = null, modifier = Modifier.size(44.dp))
+                Spacer(Modifier.width(10.dp))
+                Text("ركّز", fontSize = 32.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.weight(1f))
+                Text("v7", color = Mute, fontSize = 11.sp)
                 TextButton(onClick = { adminMode = 1 }) { Text("🔑 الأخ الكبير", color = Mute) }
             }
         }
         item {
             val (msg, col) = when {
                 free && left > 0 -> "🔓 القفل ملغي من الأخ الكبير" to Ok
-                tasks.isNotEmpty() && left == 0 -> "🎉 خلّصت كل مهامك! الموبايل مفتوح" to Ok
+                todays.isNotEmpty() && todays.all { it.done } -> "🎉 خلّصت كل مهامك! الموبايل مفتوح" to Ok
                 left > 0 && !permsOk -> "⚠️ القفل مش شغال، فعّل الصلاحيات تحت" to Bad
                 left > 0 -> "🔒 القفل شغال، فاضل $left مهمة" to Acc
-                else -> "ضيف مهام اليوم عشان تبدأ" to Mute
+                later.isNotEmpty() -> "⏰ الموبايل مفتوح لحد ${fmtClock(later.minOf { it.startMin })}" to Mute
+                else -> "مفيش مهام النهارده 🎈" to Mute
             }
             Panel2 { Text(msg, color = col, fontSize = 18.sp, fontWeight = FontWeight.Bold) }
+        }
+        item {
+            OutlinedButton(onClick = { showAdd = true }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
+                Text("➕ أضيف مهمة لنفسي")
+            }
         }
         if (!usageOk) item {
             Button(onClick = { act.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) },
@@ -225,6 +249,10 @@ fun Screen() {
                 act.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${act.packageName}")))
             }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) { Text("3) اسمح بالتشغيل في الخلفية (مهم)") }
         }
+        if (!accessOk) item {
+            Button(onClick = { act.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
+                Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) { Text("4) فعّل ركّز في الإتاحة (عشان القفل يفضل شغال)") }
+        }
         if (Store.serverUrl(act).isBlank()) item {
             Panel2 { Text("⚠️ مش مربوط بالأخ الكبير. افتح 🔑 الأخ الكبير ثم الربط بصفحة المتابعة.", color = Bad) }
         } else item {
@@ -234,10 +262,10 @@ fun Screen() {
                 color = Mute, fontSize = 12.sp
             )
         }
-        if (tasks.isEmpty()) item {
-            Text("مفيش مهام لسه. الأخ الكبير هيضيفلك مهامك.", color = Mute)
+        if (todays.isEmpty()) item {
+            Text("مفيش مهام النهارده. ضيف مهمة لنفسك أو استنى الأخ الكبير يضيفلك.", color = Mute)
         }
-        items(tasks, key = { it.id }) { t ->
+        items(todays, key = { it.id }) { t ->
             val sec = live(t)
             val isActive = activeId == t.id
             val canFinish = sec >= t.minutes * 30
@@ -247,6 +275,10 @@ fun Screen() {
                         fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                     Text("${t.minutes} دقيقة", color = Mute)
                 }
+                if (t.startMin > 0) Text(
+                    "⏰ من ${fmtClock(t.startMin)}",
+                    color = if (!t.done && t.startMin > nowMin) Acc else Mute, fontSize = 13.sp
+                )
                 Text(fmt(sec), fontSize = 34.sp, fontWeight = FontWeight.ExtraBold,
                     color = if (isActive) Acc else TextC)
                 LinearProgressIndicator(
@@ -272,9 +304,59 @@ fun Screen() {
                 }
             }
         }
+        if (tasks.isNotEmpty()) item {
+            val dayNames = listOf("الأحد", "الاتنين", "التلات", "الأربع", "الخميس", "الجمعة", "السبت") // 0 = الأحد
+            Panel2 {
+                Text("📅 جدول الأسبوع", fontWeight = FontWeight.Bold)
+                listOf(6, 0, 1, 2, 3, 4, 5).forEach { d ->
+                    val ts = tasks.filter { ((it.days shr d) and 1) == 1 }.sortedBy { it.startMin }
+                    if (ts.isNotEmpty()) Text(
+                        dayNames[d] + ": " + ts.joinToString("، ") {
+                            it.name + (if (it.startMin > 0) " (${fmtClock(it.startMin)})" else "")
+                        },
+                        color = if (d == Store.todayDow()) Acc else Mute, fontSize = 13.sp
+                    )
+                }
+            }
+        }
     }
 
     if (adminMode == 1) PinDialog(act, onOk = { adminMode = 2 }, onDismiss = { adminMode = 0 })
+
+    if (showAdd) AddTaskDialog(
+        onAdd = { name, mins ->
+            Store.save(act, Store.load(act) + StudyTask(System.currentTimeMillis(), name, mins, pending = true,
+                days = Store.todayBit(), once = true, day = Store.todayStamp()))
+            showAdd = false
+            reload()
+            Thread { Sync.run(act) }.start()
+        },
+        onDismiss = { showAdd = false }
+    )
+}
+
+@Composable
+fun AddTaskDialog(onAdd: (String, Int) -> Unit, onDismiss: () -> Unit) {
+    var name by remember { mutableStateOf("") }
+    var mins by remember { mutableStateOf("30") }
+    val m = mins.toIntOrNull() ?: 0
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            Button(enabled = name.isNotBlank() && m in 10..240, onClick = { onAdd(name.trim(), m) }) { Text("إضافة") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("إلغاء") } },
+        title = { Text("➕ مهمة لنفسي") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(name, { name = it.take(60) },
+                    label = { Text("المادة (مثلاً: فيزياء)") }, singleLine = true)
+                OutlinedTextField(mins, { mins = it.filter(Char::isDigit).take(3) },
+                    label = { Text("الدقايق (من 10 لـ 240)") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+            }
+        }
+    )
 }
 
 @Composable
@@ -303,7 +385,7 @@ fun PinDialog(act: MainActivity, onOk: () -> Unit, onDismiss: () -> Unit) {
 @Composable
 fun AdminPage(act: MainActivity, onChange: () -> Unit, onBack: () -> Unit) {
     var rev by remember { mutableIntStateOf(0) }
-    val tasks = remember(rev) { Store.load(act) }
+    val tasks = remember(rev) { Store.todays(act) }
     val logs = remember(rev) { Store.logs(act) }
     val remoteFree = remember(rev) { Store.isFreeRemote(act) }
     val localFree = remember(rev) { Store.isFree(act) && !Store.isFreeRemote(act) }
@@ -424,4 +506,11 @@ fun AdminPage(act: MainActivity, onChange: () -> Unit, onBack: () -> Unit) {
             }
         }
     }
+}
+
+fun fmtClock(min: Int): String {
+    val h = min / 60
+    val m = min % 60
+    val h12 = if (h % 12 == 0) 12 else h % 12
+    return String.format(Locale.getDefault(), "%d:%02d %s", h12, m, if (h < 12) "ص" else "م")
 }

@@ -18,15 +18,25 @@ import android.widget.LinearLayout
 import android.widget.TextView
 
 class BlockerService : Service() {
+    companion object {
+        @Volatile var beat = 0L
+    }
+
     private val handler = Handler(Looper.getMainLooper())
     private var overlay: View? = null
     private var current: String? = null
     private var lastQuery = 0L
     private var lastSyncAt = 0L
+    private var lastWatchdog = 0L
 
     private val check = object : Runnable {
         override fun run() {
             val nowT = System.currentTimeMillis()
+            beat = nowT
+            if (nowT - lastWatchdog > 60_000) {
+                lastWatchdog = nowT
+                scheduleRestart(120_000)
+            }
             if (nowT - lastSyncAt > 45_000) {
                 lastSyncAt = nowT
                 Thread { Sync.run(this@BlockerService) }.start()
@@ -119,10 +129,30 @@ class BlockerService : Service() {
         startForeground(1, n)
         handler.removeCallbacks(check)
         handler.post(check)
+        Reminders.schedule(this)
         return START_STICKY
     }
 
+    // لو الخدمة اتقفلت (سحب من الأخيرة / النظام قتلها) نرجّعها تاني
+    private fun scheduleRestart(delayMs: Long) {
+        try {
+            val pi = PendingIntent.getForegroundService(
+                this, 7, Intent(this, BlockerService::class.java),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val am = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + delayMs, pi)
+        } catch (_: Exception) {}
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        scheduleRestart(1500)
+        try { startForegroundService(Intent(this, BlockerService::class.java)) } catch (_: Exception) {}
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onDestroy() {
+        scheduleRestart(1500)
         handler.removeCallbacks(check)
         hideOverlay()
         super.onDestroy()
