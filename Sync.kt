@@ -20,7 +20,7 @@ object Sync {
 
             val ta = JSONArray()
             Store.load(c).forEach {
-                val el = if (it.id == activeId) ((now - activeStart) / 1000).toInt().coerceAtLeast(0) else 0
+                val el = if (it.id == activeId) Store.elapsed(activeStart, now) else 0
                 ta.put(JSONObject().put("id", it.id)
                     .put("sec", minOf(it.studiedSec + el, it.minutes * 60)).put("done", it.done))
             }
@@ -33,10 +33,11 @@ object Sync {
             }
             val na = JSONArray()
             Store.load(c).filter { it.pending }.forEach {
-                na.put(JSONObject().put("id", it.id).put("name", it.name).put("min", it.minutes))
+                na.put(JSONObject().put("id", it.id).put("name", it.name).put("min", it.minutes)
+                    .put("days", it.days).put("start", it.startMin).put("once", it.once))
             }
             val body = JSONObject().put("key", key).put("epoch", Store.epoch(c))
-                .put("tasks", ta).put("log", la).put("newTasks", na)
+                .put("tasks", ta).put("log", la).put("newTasks", na).put("day", Store.todayStamp())
                 .put("active", if (activeId != 0L) JSONObject().put("id", activeId).put("start", activeStart) else JSONObject.NULL)
 
             val conn = URL("$base/api/sync").openConnection() as HttpURLConnection
@@ -72,7 +73,8 @@ object Sync {
             val sec = if (reset) o.getInt("sec")
                       else minOf(maxOf(o.getInt("sec"), lt?.studiedSec ?: 0), min * 60)
             val done = if (reset) o.getBoolean("done") else (o.getBoolean("done") || lt?.done == true)
-            StudyTask(id, o.getString("name"), min, sec, done)
+            StudyTask(id, o.getString("name"), min, sec, done, false,
+                o.optInt("days", 127), o.optInt("start", 0), o.optBoolean("once"), Store.todayStamp())
         }
         if (reset) { Store.clearActive(c); Store.setEpoch(c, srvEpoch) }
         // مهمة ضفتها بنفسك أثناء المزامنة لسه ماوصلتش للسيرفر: نسيبها لحد المزامنة الجاية

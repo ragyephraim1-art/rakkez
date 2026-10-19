@@ -3,6 +3,7 @@ package com.rakkez.app
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Calendar
 
 data class StudyTask(
     val id: Long,
@@ -10,7 +11,11 @@ data class StudyTask(
     val minutes: Int,
     val studiedSec: Int = 0,
     val done: Boolean = false,
-    val pending: Boolean = false // مهمة ضفتها بنفسك ولسه ماتبعتتش للسيرفر
+    val pending: Boolean = false, // مهمة ضفتها بنفسك ولسه ماتبعتتش للسيرفر
+    val days: Int = 127,          // أيام الأسبوع: بت لكل يوم (0 = الأحد ... 6 = السبت)
+    val startMin: Int = 0,        // بتبدأ من الساعة كام (دقايق من نص الليل)
+    val once: Boolean = false,    // مهمة لمرة واحدة (بتتمسح تاني يوم)
+    val day: Int = 0              // تاريخ اليوم اللي التقدّم بتاعها (yyyyMMdd)
 )
 
 data class LogEntry(val t: Long, val type: String, val name: String, val extra: Int, val id: Long)
@@ -33,12 +38,48 @@ object Store {
     fun blocked(c: Context): Set<String> = prefs(c).getStringSet("blocked", null)?.toSet() ?: DEFAULT_BLOCKED
     fun setBlocked(c: Context, s: Set<String>) = prefs(c).edit().putStringSet("blocked", s).apply()
 
+    // ---------- الأيام والمواعيد ----------
+    fun todayStamp(): Int {
+        val c = Calendar.getInstance()
+        return c.get(Calendar.YEAR) * 10000 + (c.get(Calendar.MONTH) + 1) * 100 + c.get(Calendar.DAY_OF_MONTH)
+    }
+    fun todayDow(): Int = Calendar.getInstance().get(Calendar.DAY_OF_WEEK) - 1 // 0 = الأحد ... 6 = السبت
+    fun todayBit(): Int = 1 shl todayDow()
+    fun nowMin(): Int {
+        val c = Calendar.getInstance()
+        return c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE)
+    }
+    private fun startOfToday(): Long {
+        val c = Calendar.getInstance()
+        c.set(Calendar.HOUR_OF_DAY, 0); c.set(Calendar.MINUTE, 0); c.set(Calendar.SECOND, 0); c.set(Calendar.MILLISECOND, 0)
+        return c.timeInMillis
+    }
+    // الثواني اللي عدّت من وقت البداية، من غير اللي قبل نص الليل
+    fun elapsed(start: Long, now: Long): Int =
+        ((now - maxOf(start, startOfToday())) / 1000).toInt().coerceAtLeast(0)
+
+    fun isToday(t: StudyTask) = (t.days and todayBit()) != 0
+    fun todays(c: Context): List<StudyTask> = load(c).filter { isToday(it) }.sortedBy { it.startMin }
+    fun dueCount(c: Context): Int {
+        val m = nowMin()
+        return todays(c).count { !it.done && it.startMin <= m }
+    }
+
     // ---------- المهام ----------
+    // كل يوم جديد: التقدّم بيتصفّر، ومهام "المرة الواحدة" بتتمسح
     fun load(c: Context): List<StudyTask> {
+        val today = todayStamp()
         val arr = JSONArray(prefs(c).getString("tasks", "[]"))
-        return (0 until arr.length()).map {
+        return (0 until arr.length()).mapNotNull {
             val o = arr.getJSONObject(it)
-            StudyTask(o.getLong("id"), o.getString("name"), o.getInt("min"), o.getInt("sec"), o.getBoolean("done"), o.optBoolean("pending"))
+            val saved = o.optInt("day", 0)
+            val once = o.optBoolean("once")
+            val fresh = saved == 0 || saved == today
+            if (once && !fresh) null else StudyTask(
+                o.getLong("id"), o.getString("name"), o.getInt("min"),
+                if (fresh) o.getInt("sec") else 0, fresh && o.getBoolean("done"),
+                o.optBoolean("pending"), o.optInt("days", 127), o.optInt("start", 0), once, today
+            )
         }
     }
 
@@ -46,7 +87,9 @@ object Store {
         val arr = JSONArray()
         tasks.forEach {
             arr.put(JSONObject().put("id", it.id).put("name", it.name)
-                .put("min", it.minutes).put("sec", it.studiedSec).put("done", it.done).put("pending", it.pending))
+                .put("min", it.minutes).put("sec", it.studiedSec).put("done", it.done).put("pending", it.pending)
+                .put("days", it.days).put("start", it.startMin).put("once", it.once)
+                .put("day", if (it.day == 0) todayStamp() else it.day))
         }
         prefs(c).edit().putString("tasks", arr.toString()).apply()
     }
@@ -78,7 +121,7 @@ object Store {
     fun stopActive(c: Context) {
         val id = activeId(c)
         if (id != 0L) {
-            val el = ((System.currentTimeMillis() - activeStart(c)) / 1000).toInt().coerceAtLeast(0)
+            val el = elapsed(activeStart(c), System.currentTimeMillis())
             val tasks = load(c)
             val t = tasks.firstOrNull { it.id == id }
             if (t != null) {
@@ -118,6 +161,7 @@ object Store {
     fun pin(c: Context) = prefs(c).getString("pin", "1234") ?: "1234"
     fun setPin(c: Context, p: String) = prefs(c).edit().putString("pin", p).apply()
 
-    fun remaining(c: Context) = load(c).count { !it.done }
-    fun isLocked(c: Context) = !isFree(c) && remaining(c) > 0
+    // اللي ميعاده جه وماخلصش النهارده
+    fun remaining(c: Context) = dueCount(c)
+    fun isLocked(c: Context) = !isFree(c) && dueCount(c) > 0
 }
